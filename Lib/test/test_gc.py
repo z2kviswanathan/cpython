@@ -539,6 +539,13 @@ class GCTests(unittest.TestCase):
             # would be damaged, with an empty __dict__.
             self.assertEqual(x, None)
 
+    def test_freeze(self):
+        gc.freeze()
+        self.assertGreater(gc.get_freeze_count(), 0)
+        gc.unfreeze()
+        self.assertEqual(gc.get_freeze_count(), 0)
+
+
 class GCTogglingTests(unittest.TestCase):
     def setUp(self):
         gc.enable()
