@@ -1371,7 +1371,8 @@ PyDoc_STRVAR(gc_freeze__doc__,
 static PyObject *
 gc_freeze_impl(PyObject *module)
 {
-    for (int i = 0; i < NUM_GENERATIONS; ++i) {
+    int i;
+    for (i = 0; i < NUM_GENERATIONS; ++i) {
         gc_list_merge(GEN_HEAD(i), &permanent_generation.head);
         generations[i].count = 0;
     }
