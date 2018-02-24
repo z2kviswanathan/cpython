@@ -40,12 +40,15 @@ struct gc_generation {
 #define GEN_HEAD(n) (&generations[n].head)
 
 /* linked lists of container objects */
-static struct gc_generation generations[NUM_GENERATIONS] = {
+static struct gc_generation generations[NUM_GENERATIONS+1] = {
     /* PyGC_Head,                               threshold,      count */
     {{{GEN_HEAD(0), GEN_HEAD(0), 0}},           700,            0},
     {{{GEN_HEAD(1), GEN_HEAD(1), 0}},           10,             0},
     {{{GEN_HEAD(2), GEN_HEAD(2), 0}},           10,             0},
+    {{{GEN_HEAD(3), GEN_HEAD(3), 0}},           0,              0},
 };
+
+#define permanent_generation generations[NUM_GENERATIONS]
 
 PyGC_Head *_PyGC_generation0 = GEN_HEAD(0);
 
@@ -894,8 +897,10 @@ collect(int generation)
         for (i = 0; i < NUM_GENERATIONS; i++)
             PySys_WriteStderr(" %" PY_FORMAT_SIZE_T "d",
                               gc_list_size(GEN_HEAD(i)));
-        t1 = get_time();
         PySys_WriteStderr("\n");
+        PySys_WriteStderr("\ngc: objects in permanent generation: %" PY_FORMAT_SIZE_T "d\n",
+                         gc_list_size(&permanent_generation.head));
+        t1 = get_time();
     }
 
     /* update collection and allocation counters */
@@ -1344,12 +1349,105 @@ gc_is_tracked(PyObject *self, PyObject *obj)
     return result;
 }
 
+/*
+gc.freeze
+
+Freeze all current tracked objects and ignore them for future collections.
+
+This can be used before a POSIX fork() call to make the gc copy-on-write friendly.
+Note: collection before a POSIX fork() call may free pages for future allocation
+which can cause copy-on-write.
+*/
+PyDoc_STRVAR(gc_freeze__doc__,
+"freeze($module, /)\n"
+"--\n"
+"\n"
+"Freeze all current tracked objects and ignore them for future collections.\n"
+"\n"
+"This can be used before a POSIX fork() call to make the gc copy-on-write friendly.\n"
+"Note: collection before a POSIX fork() call may free pages for future allocation\n"
+"which can cause copy-on-write.");
+
+static PyObject *
+gc_freeze_impl(PyObject *module)
+{
+    int i;
+    for (i = 0; i < NUM_GENERATIONS; ++i) {
+        gc_list_merge(GEN_HEAD(i), &permanent_generation.head);
+        generations[i].count = 0;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+gc_freeze(PyObject *module, PyObject *ignored)
+{
+    return gc_freeze_impl(module);
+}
+
+/*
+gc.unfreeze
+
+Unfreeze all objects in the permanent generation.
+
+Put all objects in the permanent generation back into oldest generation.
+*/
+PyDoc_STRVAR(gc_unfreeze__doc__,
+"unfreeze($module, /)\n"
+"--\n"
+"\n"
+"Unfreeze all objects in the permanent generation.\n"
+"\n"
+"Put all objects in the permanent generation back into oldest generation.");
+
+static PyObject *
+gc_unfreeze_impl(PyObject *module)
+{
+    gc_list_merge(&permanent_generation.head, GEN_HEAD(NUM_GENERATIONS-1));
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+gc_unfreeze(PyObject *module, PyObject *ignored)
+{
+    return gc_unfreeze_impl(module);
+}
+
+/*
+gc.get_freeze_count -> long
+
+Return the number of objects in the permanent generation.
+*/
+PyDoc_STRVAR(gc_get_freeze_count__doc__,
+"get_freeze_count($module, /)\n"
+"--\n"
+"\n"
+"Return the number of objects in the permanent generation.");
+
+static int
+gc_get_freeze_count_impl(PyObject *module)
+{
+    return gc_list_size(&permanent_generation.head);
+}
+
+static PyObject *
+gc_get_freeze_count(PyObject *module, PyObject *ignored)
+{
+    int _return_value = gc_get_freeze_count_impl(module);
+    if ((_return_value == -1) && PyErr_Occurred()) {
+        return NULL;
+    }
+    return PyLong_FromLong((long)_return_value);
+}
 
 PyDoc_STRVAR(gc__doc__,
 "This module provides access to the garbage collector for reference cycles.\n"
 "\n"
 "enable() -- Enable automatic garbage collection.\n"
 "disable() -- Disable automatic garbage collection.\n"
+"freeze() -- Freeze all tracked objects and ignore them for future collections.\n"
+"unfreeze() -- Unfreeze all objects in the permanent generation.\n"
+"get_freeze_count() -- Return the number of objects in the permanent generation.\n"
 "isenabled() -- Returns true if automatic collection is enabled.\n"
 "collect() -- Do a full collection right now.\n"
 "get_count() -- Return the current collection counts.\n"
@@ -1365,6 +1463,9 @@ PyDoc_STRVAR(gc__doc__,
 static PyMethodDef GcMethods[] = {
     {"enable",             gc_enable,     METH_NOARGS,  gc_enable__doc__},
     {"disable",            gc_disable,    METH_NOARGS,  gc_disable__doc__},
+    {"freeze",             gc_freeze,     METH_NOARGS,  gc_freeze__doc__},
+    {"unfreeze",           gc_unfreeze,   METH_NOARGS,  gc_unfreeze__doc__},
+    {"get_freeze_count",   gc_get_freeze_count,   METH_NOARGS,  gc_get_freeze_count__doc__},
     {"isenabled",          gc_isenabled,  METH_NOARGS,  gc_isenabled__doc__},
     {"set_debug",          gc_set_debug,  METH_VARARGS, gc_set_debug__doc__},
     {"get_debug",          gc_get_debug,  METH_NOARGS,  gc_get_debug__doc__},
